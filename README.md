@@ -12,7 +12,7 @@ The framework enables collaborative sparse logistic-regression modeling, coeffic
 
 The complete Federated ADMM-IRLS formulation, local IRLS derivation, global and dual updates, convergence diagnostics, and algorithm are available on the project webpage:
 
-[View the Federated ADMM-IRLS] (https://atikur616.github.io/Federated-ADMM-IRLS-for-Logistic-Regression/)
+[View the Federated ADMM-IRLS](https://atikur616.github.io/Federated-ADMM-IRLS-for-Logistic-Regression/)
 
 ## Repository Files
 
