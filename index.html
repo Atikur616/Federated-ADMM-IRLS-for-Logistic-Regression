@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Federated ADMM-IRLS" />
+  <title>Federated ADMM-IRLS</title>
+
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        tags: 'ams'
+      },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #586174;
+      --accent: #1757a6;
+      --accent-soft: #eef5ff;
+      --border: #d9e1ec;
+      --paper: #ffffff;
+      --background: #f4f7fb;
+      --warm: #fffaf0;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--background);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 36px auto;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 14px 38px rgba(21, 39, 70, 0.08);
+      overflow: hidden;
+    }
+
+    header {
+      padding: 46px 56px 34px;
+      background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+      border-bottom: 1px solid var(--border);
+    }
+
+    header h1 {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 18px 56px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    nav a {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid #cfe0f7;
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    main { padding: 24px 56px 56px; }
+    section { scroll-margin-top: 92px; }
+
+    h2 {
+      margin: 32px 0 16px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--border);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 30px;
+      line-height: 1.25;
+      color: #112d54;
+    }
+
+    h3 {
+      margin: 32px 0 10px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 22px;
+      color: #233f67;
+    }
+
+    p { margin: 12px 0; }
+
+    .equation {
+      margin: 20px 0;
+      padding: 17px 20px;
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      background: #fbfdff;
+      overflow-x: auto;
+    }
+
+    .final-rule {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border: 1px solid #bcd3ee;
+      border-radius: 10px;
+      background: var(--accent-soft);
+    }
+
+    .algorithm {
+      margin: 26px 0;
+      padding: 22px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fcfcfd;
+    }
+
+    .algorithm h3 { margin-top: 0; }
+    .algorithm .step { margin-left: 22px; }
+    .algorithm .substep { margin-left: 44px; }
+
+    footer {
+      padding: 20px 56px 30px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 720px) {
+      body { font-size: 16px; }
+      .page { width: min(100% - 14px, 1120px); margin: 8px auto; border-radius: 10px; }
+      header, main, footer { padding-left: 22px; padding-right: 22px; }
+      nav { padding: 14px 22px; }
+      h2 { font-size: 25px; }
+      .equation { padding: 13px 12px; }
+      .algorithm .step, .algorithm .substep { margin-left: 0; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+      nav { display: none; }
+      header { background: #fff; }
+      .equation, .final-rule, .algorithm { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <article class="page">
+    <header>
+      <h1>Federated ADMM-IRLS</h1>
+    </header>
+
+    <nav aria-label="Section navigation">
+      <a href="#formulation">Formulation</a>
+      <a href="#local-update">Local IRLS update</a>
+      <a href="#global-update">Global and dual updates</a>
+      <a href="#convergence">Convergence diagnostics</a>
+      <a href="#algorithm">Algorithm</a>
+    </nav>
+
+    <main>
+      <section id="formulation">
+        <h2>Federated ADMM-IRLS Formulation</h2>
+
+        <p>
+          Suppose there are $m$ data centers. Center $i$ holds a local dataset
+          $D_i=\{(x_{ij},y_{ij})\}_{j=1}^{n_i}$ for $i=1,\ldots,m$, where
+          $x_{ij}\in\mathbb{R}^{p}$ is a $p$-dimensional predictor vector and
+          $y_{ij}\in\{0,1\}$ is a binary response for subject $j$ at center $i$.
+          Let $X_i\in\mathbb{R}^{n_i\times p}$ denote the local design matrix whose
+          $j^{\mathrm{th}}$ row is $x_{ij}^{\top}$, and
+          $y_i=(y_{i1},\ldots,y_{in_i})^{\top}\in\{0,1\}^{n_i}$ denote the response vector.
+          The goal is to estimate a single global sparse coefficient vector
+          $\beta\in\mathbb{R}^{p}$ that captures the relationship between predictors and
+          response across all centers while preserving privacy.
+        </p>
+
+        <p>For observation $j$ at center $i$, the LR model is</p>
+        <div class="equation">
+          $$
+          \Pr(y_{ij}=1\mid x_{ij};\beta)
+          =p_{ij}(\beta)
+          =\frac{1}{1+\exp(-x_{ij}^{\top}\beta)}.
+          $$
+        </div>
+
+        <p>Because $y_{ij}$ follows a Bernoulli distribution with parameter $p_{ij}(\beta)$, its probability mass function is</p>
+        <div class="equation">
+          $$
+          \Pr(y_{ij}\mid p_{ij}(\beta))
+          =p_{ij}(\beta)^{y_{ij}}\{1-p_{ij}(\beta)\}^{1-y_{ij}}.
+          $$
+        </div>
+
+        <p>Assuming conditional independence given $\beta$, the likelihood for center $i$ is</p>
+        <div class="equation">
+          $$
+          L_i(\beta)=\prod_{j=1}^{n_i}
+          p_{ij}(\beta)^{y_{ij}}\{1-p_{ij}(\beta)\}^{1-y_{ij}}.
+          $$
+        </div>
+
+        <p>Taking logarithms gives the log-likelihood</p>
+        <div class="equation">
+          $$
+          \ell_i(\beta)=\sum_{j=1}^{n_i}
+          \left[y_{ij}\log p_{ij}(\beta)+(1-y_{ij})\log(1-p_{ij}(\beta))\right].
+          \tag{2.1}
+          $$
+        </div>
+
+        <p>The negative log-likelihood $\mathcal{L}_i(\beta)=-\ell_i(\beta)$ is minimized. Using the identities below,</p>
+        <div class="equation">
+          $$
+          \log p_{ij}(\beta)
+          =x_{ij}^{\top}\beta-\log\{1+\exp(x_{ij}^{\top}\beta)\},
+          \qquad
+          \log\{1-p_{ij}(\beta)\}
+          =-\log\{1+\exp(x_{ij}^{\top}\beta)\},
+          $$
+        </div>
+
+        <p>By substituting into (2.1), the standard logistic loss is obtained</p>
+        <div class="equation">
+          $$
+          \mathcal{L}_i(\beta)
+          =\sum_{j=1}^{n_i}
+          \left[\log\{1+\exp(x_{ij}^{\top}\beta)\}-y_{ij}x_{ij}^{\top}\beta\right].
+          $$
+        </div>
+
+        <p>To perform sparse estimation and variable selection, for a given center $i$, the $\ell_1$-penalized LR objective is</p>
+        <div class="equation">
+          $$
+          \min_{\beta\in\mathbb{R}^{p}}
+          \mathcal{L}_i(\beta)+\lambda\lVert\beta\rVert_1,
+          \qquad \lambda>0.
+          \tag{2.2}
+          $$
+        </div>
+
+        <p>
+          To enable distributed optimization, a consensus formulation is adopted by introducing
+          a local parameter $\beta_i\in\mathbb{R}^{p}$ and a global consensus parameter
+          $z\in\mathbb{R}^{p}$, yielding
+        </p>
+        <div class="equation">
+          $$
+          \begin{aligned}
+          \min_{\{\beta_i\},z}\quad &
+          \sum_{i=1}^{m}\mathcal{L}_i(\beta_i)+\lambda\lVert z\rVert_1\\
+          \text{s.t.}\quad &\beta_i=z,\qquad i=1,\ldots,m.
+          \end{aligned}
+          $$
+        </div>
+
+        <p>
+          Following the scaled ADMM formulation, the resulting scaled augmented Lagrangian
+          with dual variables $u_i$ and penalty parameter $\rho>0$ is
+        </p>
+        <div class="equation">
+          $$
+          \mathcal{L}_{\rho}(\{\beta_i\},z,\{u_i\})
+          =\sum_{i=1}^{m}
+          \left[\mathcal{L}_i(\beta_i)+\frac{\rho}{2}\lVert\beta_i-z+u_i\rVert_2^2\right]
+          +\lambda\lVert z\rVert_1.
+          \tag{2.3}
+          $$
+        </div>
+
+        <p>At ADMM iteration $k$, the local update at center $i$ solves the $\beta_i$-subproblem</p>
+        <div class="equation">
+          $$
+          \beta_i^{k+1}
+          =\arg\min_{\beta_i\in\mathbb{R}^{p}}
+          \left\{\mathcal{L}_i(\beta_i)
+          +\frac{\rho}{2}\lVert\beta_i-z^k+u_i^k\rVert_2^2\right\}.
+          $$
+        </div>
+      </section>
+
+      <section id="local-update">
+        <h2>Local IRLS Update</h2>
+
+        <p>Let</p>
+        <div class="equation">
+          $$
+          \Phi_i^k(\beta_i)
+          =\mathcal{L}_i(\beta_i)
+          +\frac{\rho}{2}\lVert\beta_i-z^k+u_i^k\rVert_2^2.
+          $$
+        </div>
+
+        <p>Then the local objective can be written as</p>
+        <div class="equation">
+          $$
+          \beta_i^{k+1}=\arg\min_{\beta_i\in\mathbb{R}^{p}}\Phi_i^k(\beta_i).
+          \tag{2.4}
+          $$
+        </div>
+
+        <p>
+          Unlike linear regression, the logistic loss $\mathcal{L}_i(\beta_i)$ is nonlinear,
+          and the minimizer $\Phi_i^k(\beta_i)$ generally has no closed-form solution.
+          $\beta_i^{k+1}$ is therefore computed by applying the Newton-Raphson method; for LR
+          this corresponds to IRLS. Let $\beta_i^{(t)}$ denote the current inner IRLS iterate
+          within the $k^{\mathrm{th}}$ ADMM iteration. Newton's update is
+        </p>
+        <div class="equation">
+          $$
+          \beta_i^{(t+1)}
+          =\beta_i^{(t)}-
+          \left[\nabla^2\Phi_i^k\!\left(\beta_i^{(t)}\right)\right]^{-1}
+          \nabla\Phi_i^k\!\left(\beta_i^{(t)}\right).
+          \tag{2.5}
+          $$
+        </div>
+
+        <p>To derive the gradient and Hessian, the fitted probabilities at the current inner iterate are defined as follows:</p>
+        <div class="equation">
+          $$
+          p_{ij}^{(t)}
+          =\Pr\!\left(y_{ij}=1\mid x_{ij};\beta_i^{(t)}\right)
+          =\frac{1}{1+\exp(-x_{ij}^{\top}\beta_i^{(t)})},
+          \qquad
+          p_i^{(t)}=\left(p_{i1}^{(t)},\ldots,p_{in_i}^{(t)}\right)^{\top}.
+          $$
+        </div>
+
+        <h3>Gradient derivation</h3>
+        <p>By differentiating the logistic loss and the quadratic ADMM penalty term with respect to $\beta_i^{(t)}$, the following expression is obtained:</p>
+        <div class="equation">
+          $$
+          \begin{aligned}
+          \nabla\Phi_i^k\!\left(\beta_i^{(t)}\right)
+          &=\nabla\mathcal{L}_i\!\left(\beta_i^{(t)}\right)
+          +\nabla\frac{\rho}{2}\left\lVert\beta_i^{(t)}-z^k+u_i^k\right\rVert_2^2\\
+          &=\sum_{j=1}^{n_i}\frac{\partial}{\partial\beta_i}
+          \left[\log\{1+\exp(x_{ij}^{\top}\beta_i^{(t)})\}
+          -y_{ij}x_{ij}^{\top}\beta_i^{(t)}\right]
+          +\nabla\frac{\rho}{2}\left\lVert\beta_i^{(t)}-z^k+u_i^k\right\rVert_2^2\\
+          &=\sum_{j=1}^{n_i}
+          \left[
+          \frac{\exp(x_{ij}^{\top}\beta_i^{(t)})\,x_{ij}}
+          {1+\exp(x_{ij}^{\top}\beta_i^{(t)})}
+          -y_{ij}x_{ij}
+          \right]
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right)\\
+          &=\sum_{j=1}^{n_i}
+          \left[
+          \frac{1}{1+\exp(-x_{ij}^{\top}\beta_i^{(t)})}
+          -y_{ij}
+          \right]x_{ij}
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right)\\
+          &=\sum_{j=1}^{n_i}
+          \left(p_{ij}^{(t)}-y_{ij}\right)x_{ij}
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right).
+          \end{aligned}
+          $$
+        </div>
+
+        <p>The gradient can be written compactly as</p>
+        <div class="equation">
+          $$
+          \nabla\Phi_i^k\!\left(\beta_i^{(t)}\right)
+          =X_i^{\top}\left(p_i^{(t)}-y_i\right)
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right).
+          \tag{2.6}
+          $$
+        </div>
+
+        <h3>Hessian derivation</h3>
+        <p>To apply the IRLS update, the Hessian is also required. By differentiating $\nabla\Phi_i^k(\beta_i^{(t)})$ and evaluating at $\beta_i^{(t)}$, the following expression is obtained:</p>
+        <div class="equation">
+          $$
+          \begin{aligned}
+          \nabla^2\Phi_i^k\!\left(\beta_i^{(t)}\right)
+          &=\frac{\partial}{\partial\beta_i}
+          \nabla\Phi_i^k\!\left(\beta_i^{(t)}\right)\\
+          &=\frac{\partial}{\partial\beta_i}
+          \left[
+          \sum_{j=1}^{n_i}\left(p_{ij}^{(t)}-y_{ij}\right)x_{ij}
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right)
+          \right]\\
+          &=\sum_{j=1}^{n_i}
+          \left(\frac{\partial}{\partial\beta_i}p_{ij}^{(t)}\right)x_{ij}^{\top}
+          +\rho I_p\\
+          &=\sum_{j=1}^{n_i}
+          \left(
+          \frac{\partial}{\partial\beta_i}
+          \left(1+\exp(-x_{ij}^{\top}\beta_i^{(t)})\right)^{-1}
+          \right)x_{ij}^{\top}+\rho I_p\\
+          &=\sum_{j=1}^{n_i}
+          \left(
+          -\left(1+\exp(-x_{ij}^{\top}\beta_i^{(t)})\right)^{-2}
+          \frac{\partial}{\partial\beta_i}
+          \exp(-x_{ij}^{\top}\beta_i^{(t)})
+          \right)x_{ij}^{\top}+\rho I_p\\
+          &=\sum_{j=1}^{n_i}
+          \left(
+          -\left(1+\exp(-x_{ij}^{\top}\beta_i^{(t)})\right)^{-2}
+          \exp(-x_{ij}^{\top}\beta_i^{(t)})
+          \frac{\partial}{\partial\beta_i}(-x_{ij}^{\top}\beta_i^{(t)})
+          \right)x_{ij}^{\top}+\rho I_p\\
+          &=\sum_{j=1}^{n_i}
+          \left(
+          -\left(1+\exp(-x_{ij}^{\top}\beta_i^{(t)})\right)^{-2}
+          \exp(-x_{ij}^{\top}\beta_i^{(t)})(-x_{ij})
+          \right)x_{ij}^{\top}+\rho I_p\\
+          &=\sum_{j=1}^{n_i}
+          \frac{\exp(-x_{ij}^{\top}\beta_i^{(t)})}
+          {\left(1+\exp(-x_{ij}^{\top}\beta_i^{(t)})\right)^2}
+          x_{ij}x_{ij}^{\top}+\rho I_p.
+          \end{aligned}
+          $$
+        </div>
+
+        <p>Using the identities</p>
+        <div class="equation">
+          $$
+          p_{ij}^{(t)}
+          =\frac{1}{1+\exp(-x_{ij}^{\top}\beta_i^{(t)})},
+          \qquad
+          1-p_{ij}^{(t)}
+          =\frac{\exp(-x_{ij}^{\top}\beta_i^{(t)})}
+          {1+\exp(-x_{ij}^{\top}\beta_i^{(t)})},
+          $$
+        </div>
+
+        <p>the Hessian is given by</p>
+        <div class="equation">
+          $$
+          \nabla^2\Phi_i^k\!\left(\beta_i^{(t)}\right)
+          =\sum_{j=1}^{n_i}
+          p_{ij}^{(t)}\left(1-p_{ij}^{(t)}\right)
+          x_{ij}x_{ij}^{\top}+\rho I_p.
+          $$
+        </div>
+
+        <p>The diagonal weight matrix is defined as</p>
+        <div class="equation">
+          $$
+          W_i^{(t)}
+          =\operatorname{diag}\!\left(
+          p_{i1}^{(t)}\left(1-p_{i1}^{(t)}\right),\ldots,
+          p_{in_i}^{(t)}\left(1-p_{in_i}^{(t)}\right)
+          \right).
+          $$
+        </div>
+
+        <p>Therefore, the Hessian can be written compactly as</p>
+        <div class="equation">
+          $$
+          \nabla^2\Phi_i^k\!\left(\beta_i^{(t)}\right)
+          =\sum_{j=1}^{n_i}
+          p_{ij}^{(t)}\left(1-p_{ij}^{(t)}\right)x_{ij}x_{ij}^{\top}
+          +\rho I_p
+          =X_i^{\top}W_i^{(t)}X_i+\rho I_p.
+          \tag{2.7}
+          $$
+        </div>
+
+        <h3>Newton-IRLS step</h3>
+        <p>By substituting (2.6) and (2.7) into Newton's update (2.5), the local IRLS step used to compute $\beta_i^{(k+1)}$ is obtained:</p>
+        <div class="equation">
+          $$
+          \beta_i^{(t+1)}
+          =\beta_i^{(t)}-
+          \left[X_i^{\top}W_i^{(t)}X_i+\rho I_p\right]^{-1}
+          \left[
+          X_i^{\top}\left(p_i^{(t)}-y_i\right)
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right)
+          \right].
+          \tag{2.8}
+          $$
+        </div>
+
+        <p>
+          For implementation, explicit inversion is avoided, and (2.8) is expressed as a linear system.
+          Both sides are multiplied by $[X_i^{\top}W_i^{(t)}X_i+\rho I_p]$ and rearrange:
+        </p>
+        <div class="equation">
+          $$
+          \begin{aligned}
+          \left(X_i^{\top}W_i^{(t)}X_i+\rho I_p\right)\beta_i^{(t+1)}
+          &=\left(X_i^{\top}W_i^{(t)}X_i+\rho I_p\right)\beta_i^{(t)}\\
+          &\quad-
+          \left[
+          X_i^{\top}\left(p_i^{(t)}-y_i\right)
+          +\rho\left(\beta_i^{(t)}-z^k+u_i^k\right)
+          \right].
+          \end{aligned}
+          $$
+        </div>
+
+        <p>By expanding the right-hand side and canceling the $\rho\beta_i^{(t)}$ terms, the following expression is obtained:</p>
+        <div class="equation">
+          $$
+          \left(X_i^{\top}W_i^{(t)}X_i+\rho I_p\right)\beta_i^{(t+1)}
+          =X_i^{\top}W_i^{(t)}X_i\beta_i^{(t)}
+          -X_i^{\top}\left(p_i^{(t)}-y_i\right)
+          +\rho\left(z^k-u_i^k\right).
+          \tag{2.9}
+          $$
+        </div>
+
+        <p>To express (2.9) in the standard IRLS form, the working response is defined as</p>
+        <div class="equation">
+          $$
+          z_{\mathrm{work}}^{(t)}
+          =X_i\beta_i^{(t)}+
+          \left(W_i^{(t)}\right)^{-1}\left(y_i-p_i^{(t)}\right).
+          $$
+        </div>
+
+        <p>Then</p>
+        <div class="equation">
+          $$
+          \begin{aligned}
+          X_i^{\top}W_i^{(t)}z_{\mathrm{work}}^{(t)}
+          &=X_i^{\top}W_i^{(t)}
+          \left[
+          X_i\beta_i^{(t)}+
+          \left(W_i^{(t)}\right)^{-1}\left(y_i-p_i^{(t)}\right)
+          \right]\\
+          &=X_i^{\top}
+          \left[
+          W_i^{(t)}X_i\beta_i^{(t)}+
+          \left(y_i-p_i^{(t)}\right)
+          \right]\\
+          &=X_i^{\top}W_i^{(t)}X_i\beta_i^{(t)}
+          -X_i^{\top}\left(p_i^{(t)}-y_i\right).
+          \end{aligned}
+          $$
+        </div>
+
+        <p>By substituting this identity into (2.9), the IRLS local update is obtained as the linear system. Thus, the local update equation in terms of the ADMM variables is</p>
+        <div class="equation">
+          $$
+          \beta_i^{(t+1)}
+          =\left(X_i^{\top}W_i^{(t)}X_i+\rho I_p\right)^{-1}
+          \left(
+          X_i^{\top}W_i^{(t)}z_{\mathrm{work}}^{(t)}
+          +\rho\left(z^k-u_i^k\right)
+          \right).
+          \tag{2.10}
+          $$
+        </div>
+
+        <p>The above IRLS update is repeated at each center until convergence of the local objective $\Phi_i^k(\beta_i)$, and the converged iterate is taken as the ADMM local update, i.e.,</p>
+        <div class="equation">
+          $$
+          \beta_i^{k+1}=\beta_i^{(t_{\mathrm{final}})}.
+          $$
+        </div>
+      </section>
+
+      <section id="global-update">
+        <h2>Global Consensus and Dual Updates</h2>
+
+        <p>
+          After all centers compute their local parameters $\beta_i^{k+1}$, the global consensus parameter $z$ is next updated.
+          Following the scaled ADMM framework, this step is obtained by minimizing the scaled augmented Lagrangian in (2.3)
+          with respect to $z$, while $\{\beta_i^{k+1}\}_{i=1}^{m}$ and $\{u_i^k\}_{i=1}^{m}$ are treated as fixed.
+          Therefore, the $z$-subproblem is
+        </p>
+        <div class="equation">
+          $$
+          z^{k+1}=\arg\min_z
+          \left\{
+          \lambda\lVert z\rVert_1
+          +\frac{\rho}{2}\sum_{i=1}^{m}
+          \lVert\beta_i^{k+1}-z+u_i^k\rVert_2^2
+          \right\}.
+          \tag{2.11}
+          $$
+        </div>
+
+        <p>Define</p>
+        <div class="equation">
+          $$
+          b_i^{k+1}=\beta_i^{k+1}+u_i^k,
+          \qquad
+          \bar b^{k+1}=\frac{1}{m}\sum_{i=1}^{m}b_i^{k+1}.
+          $$
+        </div>
+
+        <p>The quadratic term in (2.11) can be written as</p>
+        <div class="equation">
+          $$
+          \sum_{i=1}^{m}\lVert z-b_i^{k+1}\rVert_2^2,
+          $$
+        </div>
+
+        <p>and using the standard identity</p>
+        <div class="equation">
+          $$
+          \sum_{i=1}^{m}\lVert z-b_i^{k+1}\rVert_2^2
+          =m\lVert z-\bar b^{k+1}\rVert_2^2
+          +\sum_{i=1}^{m}\lVert b_i^{k+1}-\bar b^{k+1}\rVert_2^2,
+          $$
+        </div>
+
+        <p>where the second term is constant with respect to $z$. After this constant is dropped, the $z$-subproblem (2.11) is reduced to</p>
+        <div class="equation">
+          $$
+          z^{k+1}=\arg\min_z
+          \left\{
+          \lambda\lVert z\rVert_1
+          +\frac{m\rho}{2}\lVert z-\bar b^{k+1}\rVert_2^2
+          \right\}.
+          \tag{2.12}
+          $$
+        </div>
+
+        <p>
+          This $z$-subproblem (2.12) is separable across coordinates and has a closed-form solution via componentwise
+          soft-thresholding. $S_{\kappa}(\cdot)$ denotes the soft-thresholding operator with threshold $\kappa>0$,
+          defined for $t\in\mathbb{R}$ by
+        </p>
+        <div class="equation">
+          $$
+          S_{\kappa}(t)=\operatorname{sign}(t)\max\{|t|-\kappa,0\},
+          $$
+        </div>
+
+        <p>and applied elementwise to vectors. With $\kappa=\lambda/(m\rho)$, the global aggregation step is given by</p>
+        <div class="equation">
+          $$
+          z^{k+1}
+          =S_{\lambda/(m\rho)}\!\left(\bar b^{k+1}\right)
+          =S_{\lambda/(m\rho)}\!\left(
+          \frac{1}{m}\sum_{i=1}^{m}\left(\beta_i^{k+1}+u_i^k\right)
+          \right).
+          $$
+        </div>
+
+        <p>After updating the global consensus parameter $z^{k+1}$, the scaled dual variables are updated locally at each center according to</p>
+        <div class="equation">
+          $$
+          u_i^{k+1}=u_i^k+\beta_i^{k+1}-z^{k+1},
+          \qquad i=1,\ldots,m.
+          $$
+        </div>
+
+        <p>
+          Through this dual update, the current consensus mismatch $\beta_i^{k+1}-z^{k+1}$ is accumulated;
+          as the iterates approach agreement across centers, the mismatch is reduced and the dual variables are stabilized.
+          The iterates $\{(\beta_i^k,z^k,u_i^k)\}$ are generated by successively performing the local $\beta_i$-update,
+          the global $z$-update, and the dual update until convergence, which is assessed using the primal and dual residual
+          criteria described next.
+        </p>
+      </section>
+
+      <section id="convergence">
+        <h2>Convergence Diagnostics</h2>
+
+        <p>
+          The ADMM iterations are converged when both the primal and dual residuals meet pre-specified convergence conditions.
+          The scaled ADMM form with penalty parameter $\rho>0$ is adopted. The primal residual measures the degree of disagreement
+          (consensus violation) across the $m$ sites and is defined as
+        </p>
+        <div class="equation">
+          $$
+          \lVert r^{k+1}\rVert_2
+          =\left(\sum_{i=1}^{m}\lVert\beta_i^{k+1}-z^{k+1}\rVert_2^2\right)^{1/2}.
+          $$
+        </div>
+
+        <p>The dual residual measures the change in the consensus variable between successive iterations and is given by</p>
+        <div class="equation">
+          $$
+          \lVert s^{k+1}\rVert_2
+          =\rho\sqrt{m}\,\lVert z^{k+1}-z^k\rVert_2.
+          $$
+        </div>
+
+        <p>Following standard practice, stopping tolerances are defined using absolute and relative terms, $\epsilon_{\mathrm{abs}},\epsilon_{\mathrm{rel}}>0$. The primal tolerance is</p>
+        <div class="equation">
+          $$
+          \epsilon_{\mathrm{pri}}
+          =\sqrt{mp}\,\epsilon_{\mathrm{abs}}
+          +\epsilon_{\mathrm{rel}}
+          \max\left\{
+          \left(\sum_{i=1}^{m}\lVert\beta_i^{k+1}\rVert_2^2\right)^{1/2},
+          \sqrt{m}\,\lVert z^{k+1}\rVert_2
+          \right\},
+          $$
+        </div>
+
+        <p>while the dual tolerance is</p>
+        <div class="equation">
+          $$
+          \epsilon_{\mathrm{dual}}
+          =\sqrt{mp}\,\epsilon_{\mathrm{abs}}
+          +\epsilon_{\mathrm{rel}}\rho
+          \left(\sum_{i=1}^{m}\lVert u_i^k\rVert_2^2\right)^{1/2}.
+          $$
+        </div>
+
+        <div class="final-rule">
+          The algorithm is terminated when both
+          $\lVert r^{k+1}\rVert_2\leq\epsilon_{\mathrm{pri}}$ and
+          $\lVert s^{k+1}\rVert_2\leq\epsilon_{\mathrm{dual}}$.
+          In this study, $\epsilon_{\mathrm{abs}}=10^{-5}$ and
+          $\epsilon_{\mathrm{rel}}=10^{-4}$ are used, and a maximum number of iterations is imposed as a safeguard.
+        </div>
+      </section>
+
+      <section id="algorithm">
+        <h2>Algorithm: Federated ADMM-IRLS</h2>
+        <p>The complete federated ADMM-IRLS procedure combines the local IRLS update, the global consensus $z$-update, and the local dual update. The whole procedure is summarized in the following algorithm.</p>
+        <div class="algorithm">
+          <p><strong>Require:</strong> local data $\{(X_i,y_i)\}_{i=1}^{m}$; $m$ centers; $\lambda>0$; $\rho>0$; maximum ADMM iterations $K$; maximum IRLS iterations $T$; IRLS tolerance $\epsilon_{\mathrm{IRLS}}$.</p>
+          <p>Initialize $z^0$ and $u_i^0=0$ for $i=1,\ldots,m$.</p>
+          <p><strong>for</strong> $k=0,1,\ldots,K-1$ <strong>do</strong></p>
+          <div class="step">
+            <p><strong>for all</strong> centers $i=1,\ldots,m$ <strong>in parallel do</strong></p>
+            <div class="substep">
+              <p><strong>Local update:</strong> Each center updates $\beta_i^{k+1}$ locally and in parallel by an IRLS-based local minimization,</p>
+              <div class="equation">
+                $$
+                \beta_i^{k+1}\approx\arg\min_{\beta_i}
+                \left\{\mathcal{L}_i(\beta_i)+\frac{\rho}{2}\lVert\beta_i-z^k+u_i^k\rVert_2^2\right\}.
+                $$
+              </div>
+              <p>Initialize $\beta_i^{(0)}=z^k$.</p>
+              <p><strong>for</strong> $t=0,1,\ldots,T-1$ <strong>do</strong></p>
+              <div class="substep">
+                <p>Computes: $p_i^{(t)}$, $W_i^{(t)}$, $z_{\mathrm{work}}^{(t)}$ and solves</p>
+                <div class="equation">
+                  $$
+                  \beta_i^{(t+1)}
+                  =\left(X_i^{\top}W_i^{(t)}X_i+\rho I_p\right)^{-1}
+                  \left(X_i^{\top}W_i^{(t)}z_{\mathrm{work}}^{(t)}+\rho(z^k-u_i^k)\right).
+                  $$
+                </div>
+                <p>If $\lVert\beta_i^{(t+1)}-\beta_i^{(t)}\rVert_{\infty}\leq\epsilon_{\mathrm{IRLS}}$, then break.</p>
+              </div>
+              <p><strong>end for</strong></p>
+              <p>Set $\beta_i^{k+1}=\beta_i^{(t_{\mathrm{final}})}$. Both $\beta_i^{k+1}$ and $u_i^k$ are sent to the central server.</p>
+            </div>
+            <p><strong>end for</strong></p>
+
+            <p><strong>Global update ($z$-step):</strong> Local updates are aggregated at the central server using</p>
+            <div class="equation">
+              $$
+              z^{k+1}=S_{\lambda/(m\rho)}\!\left(
+              \frac{1}{m}\sum_{i=1}^{m}(\beta_i^{k+1}+u_i^k)
+              \right).
+              $$
+            </div>
+
+            <p><strong>for all</strong> centers $i=1,\ldots,m$ <strong>in parallel do</strong></p>
+            <div class="substep">
+              <p><strong>Dual update:</strong> Scaled dual variables are updated locally at each center according to</p>
+              <div class="equation">
+                $$
+                u_i^{k+1}=u_i^k+\beta_i^{k+1}-z^{k+1}.
+                $$
+              </div>
+            </div>
+            <p><strong>end for</strong></p>
+            <p><strong>Stopping criteria:</strong> The algorithm is stopped if $r^{k+1}\leq\epsilon_{\mathrm{pri}}$ and $s^{k+1}\leq\epsilon_{\mathrm{dual}}$.</p>
+          </div>
+          <p><strong>end for</strong></p>
+          <p><strong>return</strong> $z^{\mathrm{final}}$ (final global sparse coefficient vector).</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>Federated ADMM-IRLS</footer>
+  </article>
+</body>
+</html>
