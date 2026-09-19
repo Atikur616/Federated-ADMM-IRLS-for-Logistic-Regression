@@ -267,9 +267,3 @@ summary_results <- results_df %>%
 
 print(summary_results)
 
-write.csv(summary_results, "results/admm_irls_windows_summary_by_rho.csv", row.names = FALSE)
-
-cat("\nSaved summary by rho to:\n")
-cat("results/admm_irls_windows_summary_by_rho.csv\n")
-
-
