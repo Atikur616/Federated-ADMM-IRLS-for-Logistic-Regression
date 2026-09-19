@@ -1,269 +1,508 @@
-## Packages 
-library(pROC)
-library(dplyr)
-
-# Replications
-total_rep <- 100
-
-rep_start <- 1
-rep_end   <- total_rep
-
-cat("\nRunning replications", rep_start, "to", rep_end, "\n")
+###install packacge
+suppressPackageStartupMessages({
+  library(pROC)
+})
 
 
-# parameters
-
-# Number of features
+###### Parameters setting
+###number of predictors
 p <- 50
-
-# Number of samples per client
+### sample size
 n <- 100
+##ADMM penalty parameter
+rho <- 1
 
-## Number of center
+### Number of centers
 m <- 2
 
-# Sequence of lambda values for tuning
+##### Total Number of Replications
+N_REP <- 100
+##### Regularization values
 LAMBDA_GRID <- exp(seq(log(0.05), log(8), length.out = 20))
-
-# threshold
+#### Cut off values for selected the the variables
 threshold <- 1e-3
-# Absolute tolerance
+####Convergences limit
 eps_abs <- 1e-5
-# Relative tolerance
 eps_rel <- 1e-4
-
-# ADMM penalty parameter rho
-rho_values <- c(1, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0)
+##### Number of iterations
+max_admm_iter <- 3000
+irls_max_iter <- 100
+irls_tol <- 1e-6
 
 ### True beta
 true_beta <- c(2, 3, 1, 4, -2, rep(0, p - 5))
 
-# Helper functions
-soft_threshold <- function(x, lambda) sign(x) * pmax(0, abs(x) - lambda)
 
+##### Helper functions: Soft threshold to shrink the coeffeicnts towards zero
+soft_threshold <- function(x, lambda) {
+  sign(x) * pmax(0, abs(x) - lambda)
+}
+
+#### Data generation
 simulate_data <- function(n, p, beta) {
   X <- matrix(rnorm(n * p), nrow = n)
   prob <- plogis(X %*% beta)
   y <- rbinom(n, 1, prob)
+
   list(X = X, y = y)
 }
 
-# Prob-MSE
-val_prob_mse <- function(X, y, beta) {
-  pr <- as.vector(plogis(X %*% beta))
-  pr <- pmin(pmax(pr, 1e-6), 1 - 1e-6)
-  mean((y - pr)^2)
-}
-
-# safe_auc
+#### AUC calculation function
 safe_auc <- function(y, score) {
-  if (length(unique(y)) < 2) return(NA_real_)
+  if (length(unique(y)) < 2) {
+    return(NA_real_)
+  }
+
   tryCatch(
-    as.numeric(pROC::auc(pROC::roc(y, as.vector(score), quiet = TRUE))),
+    as.numeric(
+      pROC::auc(
+        pROC::roc(
+          y,
+          as.vector(score),
+          quiet = TRUE
+        )
+      )
+    ),
     error = function(e) NA_real_
   )
 }
 
-# validation AUC
+
+# Validation AUC averaged across centers
 val_auc_mean_clients <- function(clients_val, beta) {
-  aucs <- sapply(seq_along(clients_val), function(k) {
-    pr <- as.vector(plogis(clients_val[[k]]$X %*% beta))
-    safe_auc(clients_val[[k]]$y, pr)
-  })
-  mean(aucs, na.rm = TRUE)
+
+  aucs <- sapply(
+    seq_along(clients_val),
+    function(k) {
+
+      pr <- as.vector(
+        plogis(
+          clients_val[[k]]$X %*% beta
+        )
+      )
+
+      safe_auc(
+        clients_val[[k]]$y,
+        pr
+      )
+    }
+  )
+
+  mean(aucs,na.rm = TRUE)
 }
 
-# ADMM-IRLS local update
-admm_local_irls <- function(X, y, z, u, rho, irls_max_iter = 100, tol = 1e-6) {
+
+##### Local ADMM-IRLS update
+admm_local_irls <- function(X,y,z,u,rho,irls_max_iter = 100,tol = 1e-6) {
   p_local <- ncol(X)
   beta <- z
-  
   for (t in 1:irls_max_iter) {
-    eta   <- as.vector(X %*% beta)
-    p_hat <- pmin(pmax(plogis(eta), 1e-6), 1 - 1e-6)
-    w     <- pmax(p_hat * (1 - p_hat), 1e-3)
-    z_adj <- eta + (y - p_hat) / w
-    
-    WX   <- X * w
-    XtWX <- crossprod(X, WX)
-    XtWz <- crossprod(X, w * z_adj)
-    
-    beta_new <- solve(
-      XtWX + rho * diag(p_local),
-      XtWz + rho * (z - u)
-    )
-    
-    if (max(abs(beta_new - beta)) < tol) break
+    eta <- as.vector(X %*% beta)
+    p_hat <- pmin(pmax(plogis(eta),1e-6),1 - 1e-6)
+    w <- pmax(p_hat * (1 - p_hat),1e-3)
+
+    z_adj <- eta +(y - p_hat) / w
+    WX <- X * w
+    XtWX <- crossprod(X,WX)
+    XtWz <- crossprod(X,w * z_adj)
+    beta_new <- solve(XtWX +rho * diag(p_local),XtWz +rho * (z - u))
+
+    if (
+      max(
+        abs(beta_new - beta)
+      ) < tol
+    ) {
+      beta <- beta_new
+      break
+    }
+
     beta <- beta_new
   }
-  
+
   as.vector(beta)
 }
 
-# ADMM residuals for convergence
-admm_check <- function(beta_list, z_new, z_prev, u_list, rho, eps_abs, eps_rel, p, m) {
-  r_norm <- sqrt(sum(sapply(beta_list, function(b) sum((b - z_new)^2))))
-  s_norm <- rho * sqrt(m) * sqrt(sum((z_new - z_prev)^2))
-  
-  beta_norm <- sqrt(sum(sapply(beta_list, function(b) sum(b^2))))
-  z_norm    <- sqrt(sum(z_new^2))
-  u_norm    <- sqrt(sum(sapply(u_list, function(u) sum(u^2))))
-  
-  eps_primal <- sqrt(p * m) * eps_abs + eps_rel * max(beta_norm, sqrt(m) * z_norm)
-  eps_dual   <- sqrt(p * m) * eps_abs + eps_rel * (rho * u_norm)
-  
-  list(
-    r_norm = r_norm,
-    s_norm = s_norm,
-    eps_primal = eps_primal,
-    eps_dual = eps_dual
-  )
-}
+####### ADMM convergence criteria
+admm_check <- function(beta_list,z_new,z_prev,u_list,rho,eps_abs,eps_rel,p,m) {
 
-# Run ADMM
-run_admm <- function(clients_train, lambda, rho, p, m, eps_abs, eps_rel,
-                     z_init = NULL, u_init = NULL,
-                     max_admm_iter = 3000,
-                     irls_max_iter = 100, irls_tol = 1e-6) {
-  
-  z <- if (is.null(z_init)) rep(0, p) else z_init
-  u_list <- if (is.null(u_init)) lapply(1:m, function(j) rep(0, p)) else u_init
-  
-  converged <- FALSE
-  
-  for (iter in 1:max_admm_iter) {
-    z_prev <- z
-    
-    beta_list <- lapply(1:m, function(k)
-      admm_local_irls(
-        clients_train[[k]]$X,
-        clients_train[[k]]$y,
-        z,
-        u_list[[k]],
-        rho,
-        irls_max_iter = irls_max_iter,
-        tol = irls_tol
+  r_norm <- sqrt(sum(sapply(beta_list,function(b) {
+          sum((b - z_new)^2)
+        }
       )
     )
-    
-    avg_bu <- Reduce(`+`, Map(`+`, beta_list, u_list)) / m
-    z_new  <- soft_threshold(avg_bu, lambda / (m * rho))
-    u_list <- lapply(1:m, function(k) u_list[[k]] + beta_list[[k]] - z_new)
-    
-    chk <- admm_check(beta_list, z_new, z_prev, u_list, rho, eps_abs, eps_rel, p, m)
+  )
+
+  s_norm <- rho *sqrt(m) *sqrt(sum((z_new - z_prev)^2))
+  beta_norm <- sqrt(sum(sapply(beta_list, function(b) {
+    sum(b^2)
+        }
+      )
+    )
+  )
+
+  z_norm <- sqrt(sum(z_new^2))
+
+  u_norm <- sqrt(sum(sapply(u_list,function(u) {
+    sum(u^2)
+        }
+      )
+    )
+  )
+
+  eps_primal <-sqrt(p * m) * eps_abs +eps_rel * max(beta_norm,sqrt(m) * z_norm)
+  eps_dual <-sqrt(p * m) * eps_abs +eps_rel *(rho * u_norm)
+  list(r_norm = r_norm,s_norm = s_norm,eps_primal = eps_primal,eps_dual = eps_dual)
+}
+
+##### Run Federated ADMM-IRLS
+run_admm <- function(clients_train,lambda,rho,p,m,eps_abs,eps_rel,z_init = NULL,u_init = NULL,max_admm_iter = 3000,irls_max_iter = 100,
+    irls_tol = 1e-6,save_history = FALSE) {
+
+  z <- if (is.null(z_init)) {
+    rep(0, p)
+  } else {
+    z_init
+  }
+
+  u_list <- if (is.null(u_init)) {
+
+    lapply(
+      1:m,
+      function(j) {
+        rep(0, p)
+      }
+    )
+
+  } else {
+
+    u_init
+  }
+
+  converged <- FALSE
+
+  history_list <- if (save_history) {
+    vector(
+      "list",
+      max_admm_iter
+    )
+  } else {
+    NULL
+  }
+
+  for (iter in 1:max_admm_iter) {
+
+    z_prev <- z
+
+    beta_list <- lapply(
+      1:m,
+      function(k) {
+
+        admm_local_irls(
+          clients_train[[k]]$X,
+          clients_train[[k]]$y,
+          z,
+          u_list[[k]],
+          rho,
+          irls_max_iter = irls_max_iter,
+          tol = irls_tol
+        )
+      }
+    )
+
+    avg_bu <- Reduce(`+`,Map(`+`, beta_list,u_list)) / m
+
+    z_new <- soft_threshold(avg_bu,lambda / (m * rho))
+
+    u_list <- lapply(
+      1:m,
+      function(k) {
+        u_list[[k]] +
+          beta_list[[k]] -
+          z_new
+      }
+    )
+
+    chk <- admm_check(beta_list,z_new,z_prev,u_list,rho,eps_abs,eps_rel,p,m)
+
     z <- z_new
-    
-    if (chk$r_norm < chk$eps_primal && chk$s_norm < chk$eps_dual) {
+
+    if (save_history) {
+
+      history_list[[iter]] <- data.frame(
+        Iteration = iter,
+        Primal_Residual = chk$r_norm,
+        Dual_Residual = chk$s_norm,
+        Eps_Primal = chk$eps_primal,
+        Eps_Dual = chk$eps_dual
+      )
+    }
+
+    if (
+      chk$r_norm < chk$eps_primal &&
+      chk$s_norm < chk$eps_dual
+    ) {
+
       converged <- TRUE
       break
     }
   }
-  
-  list(
-    z = z,
-    u_list = u_list,
-    iter = iter,
-    converged = converged
-  )
+
+  history_df <- NULL
+
+  if (save_history) {
+
+    history_df <- do.call(rbind,history_list[seq_len(iter)])
+  }
+
+  list(z = z,u_list = u_list,iter = iter,converged = converged,history = history_df)
 }
 
+#### Main simulation
+results_list <- vector("list",N_REP)
 
-# Main simulation: Federated ADMM-IRLS 
-out_list <- vector("list", length = length(rho_values) * (rep_end - rep_start + 1))
-ptr <- 1
+conv_list <- vector("list",N_REP)
 
-for (rho in rho_values) {
-  for (rep in rep_start:rep_end) {
-    
-    set.seed(1000 + 100 * match(rho, rho_values) + rep)
-    
-    # train, validation and test dataset
-    clients_train <- lapply(1:m, function(j) simulate_data(n, p, true_beta))
-    clients_val   <- lapply(1:m, function(j) simulate_data(n, p, true_beta))
-    clients_test  <- lapply(1:m, function(j) simulate_data(n, p, true_beta))
-    
-    # ADMM-IRLS: tune lambda by VALIDATION AUC
-    best_lambda_admm <- LAMBDA_GRID[1]
-    best_val_admm <- -Inf
-    
-    z_ws <- rep(0, p)
-    u_ws <- lapply(1:m, function(j) rep(0, p))
-    best_z <- z_ws
-    best_u <- u_ws
-    
-    for (lam in LAMBDA_GRID) {
-      fit_lam <- run_admm(clients_train,lam,rho,p,m,eps_abs,eps_rel,z_init = z_ws,u_init = u_ws,max_admm_iter = 3000)
-      
-      z_ws <- fit_lam$z
-      u_ws <- fit_lam$u_list
-      
-      # VALIDATION AUC
-      v <- val_auc_mean_clients(clients_val, z_ws)
-      
-      if (!is.na(v) && v > best_val_admm) {
-        best_val_admm <- v
-        best_lambda_admm <- lam
-        best_z <- z_ws
-        best_u <- u_ws
-      }
+
+for (rep in 1:N_REP) {
+
+# set seed
+set.seed(1500 + rep)
+
+cat("Running replication",rep,"of", N_REP,"\n")
+
+
+##### Training, validation, and test data
+clients_train <- lapply(
+    1:m,
+    function(j) {
+      simulate_data(
+        n,
+        p,
+        true_beta
+      )
     }
-    
-    # final ADMM at best lambda
-    fit_admm <- run_admm(clients_train,best_lambda_admm,rho,p,m,eps_abs,eps_rel,z_init = best_z,u_init = best_u,max_admm_iter = 3000)
-    
-    beta_admm <- fit_admm$z
-    admm_converged <- fit_admm$converged
-    admm_iter <- fit_admm$iter
-    
-    # Evaluate ADMM-IRLS on test sets
-    beta_est <- beta_admm
-    best_lam <- best_lambda_admm
-    
-    est_active  <- abs(beta_est) > threshold
-    true_active <- abs(true_beta) > threshold
-    
-    TP <- sum(est_active & true_active)
-    FP <- sum(est_active & !true_active)
-    FN <- sum(!est_active & true_active)
-    TN <- sum(!est_active & !true_active)
-    
-    Sensitivity <- if ((TP + FN) > 0) TP / (TP + FN) else 0
-    Specificity <- if ((TN + FP) > 0) TN / (TN + FP) else 0
-    
-    MSE <- mean((beta_est - true_beta)^2)
-    MAE <- mean(abs(beta_est - true_beta))
-    
-    test_prob_mse <- mean(sapply(1:m, function(k)
-      val_prob_mse(clients_test[[k]]$X, clients_test[[k]]$y, beta_est)))
-    
-    client_aucs <- sapply(1:m, function(k) {
-      score <- as.vector(plogis(clients_test[[k]]$X %*% beta_est))
-      safe_auc(clients_test[[k]]$y, score)
-    })
-    
-    AUC <- mean(client_aucs, na.rm = TRUE)
-    
-    out_list[[ptr]] <- data.frame(Rho = rho,Replication = rep,Model = "ADMM-IRLS",Best_Lambda = best_lam,TP = TP,FP = FP,TN = TN,
-      FN = FN,Sensitivity = Sensitivity,Specificity = Specificity,MSE = MSE,MAE = MAE,Test_ProbMSE = test_prob_mse,AUC = AUC,
-      ADMM_Converged = admm_converged,ADMM_Iter = admm_iter)
-    
-    ptr <- ptr + 1
-    
-    cat("Finished rho =", rho, "| replication =", rep, "\n")
+  )
+
+  clients_val <- lapply(
+    1:m,
+    function(j) {
+      simulate_data(
+        n,
+        p,
+        true_beta
+      )
+    }
+  )
+
+  clients_test <- lapply(
+    1:m,
+    function(j) {
+      simulate_data(
+        n,
+        p,
+        true_beta
+      )
+    }
+  )
+
+
+# Tune lambda by mean validation AUC
+  best_lambda <- LAMBDA_GRID[1]
+  best_val_auc <- -Inf
+
+  z_ws <- rep(
+    0,
+    p
+  )
+
+  u_ws <- lapply(
+    1:m,
+    function(j) {
+      rep(
+        0,
+        p
+      )
+    }
+  )
+
+  best_z <- z_ws
+  best_u <- u_ws
+  best_conv_history <- NULL
+
+
+  for (lam in LAMBDA_GRID) {
+
+    fit_lam <- run_admm(
+      clients_train = clients_train,
+      lambda = lam,
+      rho = rho,
+      p = p,
+      m = m,
+      eps_abs = eps_abs,
+      eps_rel = eps_rel,
+      z_init = z_ws,
+      u_init = u_ws,
+      max_admm_iter = max_admm_iter,
+      irls_max_iter = irls_max_iter,
+      irls_tol = irls_tol,
+      save_history = TRUE
+    )
+
+    z_ws <- fit_lam$z
+    u_ws <- fit_lam$u_list
+
+    v <- val_auc_mean_clients(
+      clients_val,
+      z_ws
+    )
+
+    if (
+      !is.na(v) &&
+      v > best_val_auc
+    ) {
+
+      best_val_auc <- v
+      best_lambda <- lam
+      best_z <- z_ws
+      best_u <- u_ws
+      best_conv_history <- fit_lam$history
+    }
+  }
+
+##### Final ADMM fit using selected lambda
+fit_admm <- run_admm(clients_train = clients_train,lambda = best_lambda,rho = rho,p = p,m = m,eps_abs = eps_abs,eps_rel = eps_rel,
+    z_init = best_z,u_init = best_u,max_admm_iter = max_admm_iter,
+    irls_max_iter = irls_max_iter,
+    irls_tol = irls_tol,
+    save_history = FALSE
+  )
+
+  beta_admm <- fit_admm$z
+
+
+  ##### Variables selection measures calcaution: TP, TN, FP, FN
+  est_active <- abs(beta_admm) > threshold
+  true_active <- abs(true_beta) > threshold
+  TP <- sum(est_active &true_active)
+  FP <- sum(est_active &!true_active)
+  FN <- sum(!est_active &true_active)
+  TN <- sum(!est_active &!true_active)
+
+ #### Sensitivity and Specificity
+    Sensitivity <- if (
+    (TP + FN) > 0
+  ) {
+    TP / (TP + FN)
+  } else {
+    0
+  }
+
+  Specificity <- if (
+    (TN + FP) > 0
+  ) {
+    TN / (TN + FP)
+  } else {
+    0
+  }
+
+#### Beta-MSE and Beta-MAE
+  Beta_MSE <- mean((beta_admm - true_beta)^2)
+  Beta_MAE <- mean(abs(beta_admm - true_beta))
+#### Test AUC
+  client_aucs <- sapply(
+    1:m,
+    function(k) {
+
+      score <- as.vector(
+        plogis(
+          clients_test[[k]]$X %*%
+            beta_admm
+        )
+      )
+
+      safe_auc(
+        clients_test[[k]]$y,
+        score
+      )
+    }
+  )
+
+  AUC <- mean(client_aucs,na.rm = TRUE)
+
+#### Store results
+  results_list[[rep]] <- data.frame(
+    Replication = rep,
+    Best_Lambda = best_lambda,
+    Best_Validation_AUC = best_val_auc,
+    TP = TP,
+    TN = TN,
+    FP = FP,
+    FN = FN,
+    Sensitivity = Sensitivity,
+    Specificity = Specificity,
+    Beta_MSE = Beta_MSE,
+    Beta_MAE = Beta_MAE,
+    AUC = AUC,
+    ADMM_Converged = fit_admm$converged,
+    ADMM_Iter = fit_admm$iter
+  )
+
+##### Store convergence history for selected lambda
+    if (
+    !is.null(best_conv_history) &&
+    nrow(best_conv_history) > 0
+  ) {
+
+    best_conv_history$Replication <- rep
+    best_conv_history$Best_Lambda <- best_lambda
+    best_conv_history$Best_Validation_AUC <- best_val_auc
+
+    conv_list[[rep]] <- best_conv_history
   }
 }
 
-results_df <- dplyr::bind_rows(out_list)
 
-# Summary results
-summary_results <- results_df %>%
-  group_by(Rho) %>%
-  summarise(Mean_TP = mean(TP),SD_TP = sd(TP),Mean_FP = mean(FP),SD_FP = sd(FP),Mean_TN = mean(TN),SD_TN = sd(TN),Mean_FN = mean(FN),
-    SD_FN = sd(FN),Mean_SE = mean(Sensitivity),SD_SE = sd(Sensitivity),Mean_SP = mean(Specificity),SD_SP = sd(Specificity),
-    Mean_MSE = mean(MSE),SD_MSE = sd(MSE),Mean_MAE = mean(MAE), SD_MAE = sd(MAE), Mean_Test_ProbMSE = mean(Test_ProbMSE),
-    SD_Test_ProbMSE = sd(Test_ProbMSE),Mean_AUC = mean(AUC, na.rm = TRUE),SD_AUC = sd(AUC, na.rm = TRUE),
-    Mean_Best_Lambda = mean(Best_Lambda),SD_Best_Lambda = sd(Best_Lambda),Convergence_Rate = mean(ADMM_Converged),
-    Mean_ADMM_Iter = mean(ADMM_Iter),SD_ADMM_Iter = sd(ADMM_Iter),.groups = "drop")
+#### Combine replication-level results
+results_df <- do.call(rbind,results_list)
 
-print(summary_results)
+nonempty_conv <- Filter(Negate(is.null),conv_list)
+
+if (
+  length(nonempty_conv) > 0
+) {
+
+  conv_df <- do.call(rbind,nonempty_conv)
+
+} else {
+
+  conv_df <- NULL
+}
+
+
+##### output
+report_results <- results_df[, c("Replication","TP","TN","FP","FN","Sensitivity","Specificity","Beta_MSE","Beta_MAE",
+  "AUC")]
+
+
+report_summary <- data.frame(TP = mean(results_df$TP,na.rm = TRUE),
+  TN = mean(results_df$TN,na.rm = TRUE),
+  FP = mean(results_df$FP,na.rm = TRUE),
+  FN = mean(results_df$FN,na.rm = TRUE),
+  Sensitivity = mean( results_df$Sensitivity,na.rm = TRUE),
+  Specificity = mean(results_df$Specificity,na.rm = TRUE),
+  Beta_MSE = mean(results_df$Beta_MSE,na.rm = TRUE),
+  Beta_MAE = mean(results_df$Beta_MAE,na.rm = TRUE),
+  AUC = mean(results_df$AUC,na.rm = TRUE)
+  )
+
+
+cat("\n============================================\n")
+
+cat("Federated ADMM-IRLS simulation results\n")
+
+cat("p =",p,", n =",n,", rho =",rho,"\n")
+
+cat("============================================\n\n")
+
+print(report_summary)
 
